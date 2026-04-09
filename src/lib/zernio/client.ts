@@ -194,18 +194,56 @@ export async function listPosts(
 
 // --- Analytics ---
 
-export type AnalyticsEntry = {
-  postId: string;
+export type AnalyticsMetrics = {
   impressions: number;
+  reach: number;
   likes: number;
   comments: number;
   shares: number;
+  saves: number;
+  clicks: number;
   views: number;
-  reach?: number;
-  saves?: number;
-  clicks?: number;
+  engagementRate: number;
+  lastUpdated?: string;
+};
+
+export type AnalyticsPlatformEntry = {
+  platform: string;
+  status: string;
+  accountId: string;
+  accountUsername?: string;
+  analytics: AnalyticsMetrics;
+};
+
+export type AnalyticsPostEntry = {
+  _id: string;
+  latePostId: string;
+  content?: string;
+  publishedAt?: string;
+  scheduledFor?: string;
+  status?: string;
+  analytics: AnalyticsMetrics;
+  platforms: AnalyticsPlatformEntry[];
   platform?: string;
   platformPostUrl?: string;
+  isExternal?: boolean;
+  profileId?: string;
+  thumbnailUrl?: string | null;
+  mediaType?: string;
+  mediaItems?: unknown[];
+};
+
+export type AnalyticsOverview = {
+  totalPosts: number;
+  publishedPosts: number;
+  scheduledPosts: number;
+  lastSync?: string;
+  dataStaleness?: Record<string, unknown>;
+};
+
+export type AnalyticsResponse = {
+  overview: AnalyticsOverview;
+  posts: AnalyticsPostEntry[];
 };
 
 export async function getAnalytics(opts: {
@@ -214,15 +252,14 @@ export async function getAnalytics(opts: {
   toDate?: string;
   page?: number;
   limit?: number;
-}): Promise<AnalyticsEntry[]> {
+}): Promise<AnalyticsResponse> {
   const params = new URLSearchParams();
   if (opts.postId) params.set("postId", opts.postId);
   if (opts.fromDate) params.set("fromDate", opts.fromDate);
   if (opts.toDate) params.set("toDate", opts.toDate);
   if (opts.page) params.set("page", String(opts.page));
   if (opts.limit) params.set("limit", String(opts.limit));
-  const data = await zernioFetch<{ analytics: AnalyticsEntry[] }>(`/analytics?${params}`);
-  return data.analytics;
+  return zernioFetch<AnalyticsResponse>(`/analytics?${params}`);
 }
 
 // --- Webhooks ---

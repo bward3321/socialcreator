@@ -85,6 +85,9 @@ export default async function PostsPage() {
                           {p}
                         </Badge>
                       ))}
+                      {post.syncedFromZernio && (
+                        <Badge variant="default">imported</Badge>
+                      )}
                       <span className="text-xs text-zinc-600">
                         {format(new Date(post.createdAt), "MMM d, yyyy h:mm a")}
                       </span>

@@ -74,6 +74,7 @@ export const posts = pgTable("posts", {
     .default({})
     .notNull(),
   errorMessage: text("error_message"),
+  syncedFromZernio: boolean("synced_from_zernio").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

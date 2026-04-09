@@ -120,41 +120,96 @@ export async function GET(req: NextRequest) {
 
         try {
           const analyticsData = await getAnalytics({ fromDate, toDate, limit: 100 });
-          console.log(`[Cron:sync-analytics] Got ${analyticsData.length} analytics entries for date range ${fromDate} to ${toDate}`);
+          const postEntries = analyticsData.posts || [];
+          console.log(`[Cron:sync-analytics] Got ${postEntries.length} analytics entries for date range ${fromDate} to ${toDate}`);
 
-          for (const entry of analyticsData) {
-            if (!entry.postId) continue;
+          let newCount = 0;
+          let updatedCount = 0;
+          for (const entry of postEntries) {
+            try {
+              const zernioPostId = entry.latePostId || entry._id;
+              if (!zernioPostId) continue;
 
-            // Find the post in our DB by zernioPostId
-            const [post] = await db
-              .select()
-              .from(posts)
-              .where(
-                and(
-                  eq(posts.userId, user.id),
-                  eq(posts.zernioPostId, entry.postId)
+              // Find or create the post in our DB
+              let [post] = await db
+                .select()
+                .from(posts)
+                .where(
+                  and(
+                    eq(posts.userId, user.id),
+                    eq(posts.zernioPostId, zernioPostId)
+                  )
                 )
-              )
-              .limit(1);
+                .limit(1);
 
-            if (post) {
-              await db.insert(postAnalytics).values({
-                postId: post.id,
-                platform: entry.platform || post.platforms[0] || "unknown",
-                likes: entry.likes || 0,
-                comments: entry.comments || 0,
-                shares: entry.shares || 0,
-                views: entry.views || 0,
-                saves: entry.saves || 0,
-                reach: entry.reach || 0,
-                impressions: entry.impressions || 0,
-                engagementRate:
-                  entry.impressions > 0
-                    ? (entry.likes + entry.comments + entry.shares) / entry.impressions
-                    : 0,
-              });
+              if (!post) {
+                // Auto-import post from Zernio
+                const platformNames = entry.platforms?.map((p) => p.platform) || [];
+                if (platformNames.length === 0 && entry.platform) {
+                  platformNames.push(entry.platform);
+                }
+                const createdAt = entry.publishedAt
+                  ? new Date(entry.publishedAt)
+                  : new Date();
+
+                const [inserted] = await db
+                  .insert(posts)
+                  .values({
+                    userId: user.id,
+                    content: (entry.content || "").slice(0, 2000),
+                    mediaUrls: [],
+                    platforms: platformNames.length > 0 ? platformNames : ["unknown"],
+                    status: "published",
+                    zernioPostId,
+                    syncedFromZernio: true,
+                    createdAt,
+                    updatedAt: createdAt,
+                  })
+                  .returning();
+                post = inserted;
+                newCount++;
+              } else {
+                updatedCount++;
+              }
+
+              // Insert per-platform analytics breakdowns
+              if (entry.platforms && entry.platforms.length > 0) {
+                for (const plat of entry.platforms) {
+                  const m = plat.analytics;
+                  await db.insert(postAnalytics).values({
+                    postId: post.id,
+                    platform: plat.platform,
+                    likes: m.likes || 0,
+                    comments: m.comments || 0,
+                    shares: m.shares || 0,
+                    views: m.views || 0,
+                    saves: m.saves || 0,
+                    reach: m.reach || 0,
+                    impressions: m.impressions || 0,
+                    engagementRate: m.engagementRate || 0,
+                  });
+                }
+              } else {
+                // Fallback: use top-level analytics
+                const m = entry.analytics;
+                await db.insert(postAnalytics).values({
+                  postId: post.id,
+                  platform: entry.platform || post.platforms[0] || "unknown",
+                  likes: m.likes || 0,
+                  comments: m.comments || 0,
+                  shares: m.shares || 0,
+                  views: m.views || 0,
+                  saves: m.saves || 0,
+                  reach: m.reach || 0,
+                  impressions: m.impressions || 0,
+                  engagementRate: m.engagementRate || 0,
+                });
+              }
+            } catch (entryErr) {
+              console.error(`[Cron:sync-analytics] Failed to process entry ${entry._id}:`, entryErr);
             }
           }
+          console.log(`[Cron:sync-analytics] Synced ${postEntries.length} posts (${newCount} new, ${updatedCount} updated) for user ${user.email}`);
         } catch (e) {
           console.error(`[Cron:sync-analytics] FAILED to fetch analytics for user ${user.id}:`, e);
         }
