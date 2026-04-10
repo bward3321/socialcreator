@@ -28,6 +28,12 @@ Pulsr is a SaaS creator analytics + scheduling tool. It aggregates social media 
 - Stripe webhook handles subscription lifecycle
 - Three Vercel crons: hourly analytics sync, daily trial reminder (14:00 UTC), daily trial expiry (00:05 UTC)
 
+## Multi-tenant safety (Zernio)
+- **CRITICAL**: Zernio's `GET /v1/accounts` and `GET /v1/analytics` endpoints return ALL data across the entire org, not scoped per profile. Our code MUST filter by the user's `zernioProfileKey` after every Zernio API call.
+- `listAccounts(profileId)` in `client.ts` requires a profileId and filters client-side. Never call it without the user's profile key.
+- Analytics entries are filtered by profileId and accountId set in the cron sync. Any new Zernio integration must follow the same pattern.
+- All DB queries on `connected_accounts` and `posts` must include a `userId` filter. Never trust Zernio's response to be pre-scoped.
+
 ## Database
 6 tables: users, magic_link_tokens, sessions, connected_accounts, posts, post_analytics, account_analytics. All use UUID primary keys. Schema defined with Drizzle in `src/lib/db/schema.ts`.
 

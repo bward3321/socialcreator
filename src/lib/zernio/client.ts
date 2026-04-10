@@ -104,7 +104,7 @@ function getProfileId(acct: ZernioAccount): string | undefined {
 }
 
 export async function listAccounts(
-  filterProfileId?: string,
+  profileId: string,
   page = 1,
   limit = 100
 ): Promise<ZernioAccount[]> {
@@ -113,12 +113,22 @@ export async function listAccounts(
     limit: String(limit),
   });
   const data = await zernioFetch<{ accounts: ZernioAccount[] }>(`/accounts?${params}`);
-  if (filterProfileId) {
-    return data.accounts.filter(
-      (acct) => getProfileId(acct) === filterProfileId
+
+  // CRITICAL: Zernio's /accounts endpoint returns ALL org-wide accounts.
+  // We MUST filter to only the accounts belonging to this user's profile.
+  const filtered = data.accounts.filter(
+    (acct) => getProfileId(acct) === profileId
+  );
+
+  const discarded = data.accounts.length - filtered.length;
+  if (discarded > 0) {
+    console.error(
+      `[Zernio] TENANT FILTER: Discarded ${discarded} accounts not belonging to profile ${profileId}. ` +
+      `Kept ${filtered.length}/${data.accounts.length}.`
     );
   }
-  return data.accounts;
+
+  return filtered;
 }
 
 export async function getFollowerStats(): Promise<

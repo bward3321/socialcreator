@@ -37,11 +37,11 @@ export async function GET(req: NextRequest) {
       console.log(`[Cron:sync-analytics] Syncing user ${user.id} (${user.email})`);
 
       try {
-        // Fetch all accounts under this API key (accounts span multiple profiles)
+        // Fetch accounts scoped to THIS user's Zernio profile only
         let zernioAccounts;
         try {
-          zernioAccounts = await listAccounts();
-          console.log(`[Cron:sync-analytics] Fetched ${zernioAccounts.length} accounts for user ${user.id}`);
+          zernioAccounts = await listAccounts(user.zernioProfileKey!);
+          console.log(`[Cron:sync-analytics] Fetched ${zernioAccounts.length} accounts for user ${user.id} (profile ${user.zernioProfileKey})`);
         } catch (e) {
           console.error(`[Cron:sync-analytics] FAILED to fetch accounts for user ${user.id}:`, e);
           continue;
@@ -112,6 +112,11 @@ export async function GET(req: NextRequest) {
           }
         }
 
+        // Build set of this user's Zernio account IDs for filtering analytics
+        const userAccountIds = new Set(
+          zernioAccounts.map((a) => a._id)
+        );
+
         // Sync post analytics — pull last 30 days
         const now = new Date();
         const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -120,7 +125,24 @@ export async function GET(req: NextRequest) {
 
         try {
           const analyticsData = await getAnalytics({ fromDate, toDate, limit: 100 });
-          const postEntries = analyticsData.posts || [];
+          const allEntries = analyticsData.posts || [];
+
+          // CRITICAL: Filter analytics to only posts belonging to this user's accounts/profile
+          const postEntries = allEntries.filter((entry) => {
+            // Check if profileId matches
+            if (entry.profileId && entry.profileId === user.zernioProfileKey) return true;
+            // Check if any platform accountId belongs to this user
+            if (entry.platforms?.some((p) => userAccountIds.has(p.accountId))) return true;
+            return false;
+          });
+
+          const discardedAnalytics = allEntries.length - postEntries.length;
+          if (discardedAnalytics > 0) {
+            console.error(
+              `[Cron:sync-analytics] TENANT FILTER: Discarded ${discardedAnalytics} analytics entries not belonging to profile ${user.zernioProfileKey}. ` +
+              `Kept ${postEntries.length}/${allEntries.length}.`
+            );
+          }
           console.log(`[Cron:sync-analytics] Got ${postEntries.length} analytics entries for date range ${fromDate} to ${toDate}`);
 
           let newCount = 0;

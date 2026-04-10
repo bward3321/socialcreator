@@ -13,9 +13,9 @@ export async function GET() {
   }
 
   try {
-    // Fetch all accounts under this API key (accounts span multiple profiles)
-    const zernioAccounts = await listAccounts();
-    console.log(`[Sync] Fetched ${zernioAccounts.length} accounts from Zernio`);
+    // Fetch accounts scoped to THIS user's Zernio profile only
+    const zernioAccounts = await listAccounts(user.zernioProfileKey);
+    console.log(`[Sync] Fetched ${zernioAccounts.length} accounts for profile ${user.zernioProfileKey}`);
 
     for (const acct of zernioAccounts) {
       // Match by zernioAccountId (unique per Zernio account)
