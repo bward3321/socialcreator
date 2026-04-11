@@ -8,7 +8,7 @@ import {
   accountAnalytics,
 } from "@/lib/db/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
-import { listAccounts, getAnalytics, extractFollowerCount } from "@/lib/zernio/client";
+import { listAllAccounts, getAnalytics, extractFollowerCount } from "@/lib/zernio/client";
 
 function verifyCron(req: NextRequest): boolean {
   const auth = req.headers.get("authorization");
@@ -31,91 +31,79 @@ export async function GET(req: NextRequest) {
 
     console.log(`[Cron:sync-analytics] Found ${activeUsers.length} users with Zernio profiles`);
 
+    // Fetch ALL org accounts from Zernio once (shared across all users)
+    let allZernioAccounts;
+    try {
+      allZernioAccounts = await listAllAccounts();
+      console.log(`[Cron:sync-analytics] Fetched ${allZernioAccounts.length} total org accounts from Zernio`);
+    } catch (e) {
+      console.error("[Cron:sync-analytics] FAILED to fetch org accounts:", e);
+      return NextResponse.json({ error: "Failed to fetch accounts" }, { status: 500 });
+    }
+
+    // Build a lookup: zernioAccountId → ZernioAccount
+    const zernioAccountMap = new Map(
+      allZernioAccounts.map((a) => [a._id, a])
+    );
+
     for (const user of activeUsers) {
       if (!user.zernioProfileKey) continue;
 
       console.log(`[Cron:sync-analytics] Syncing user ${user.id} (${user.email})`);
 
       try {
-        // Fetch accounts scoped to THIS user's Zernio profile only
-        let zernioAccounts;
-        try {
-          zernioAccounts = await listAccounts(user.zernioProfileKey!);
-          console.log(`[Cron:sync-analytics] Fetched ${zernioAccounts.length} accounts for user ${user.id} (profile ${user.zernioProfileKey})`);
-        } catch (e) {
-          console.error(`[Cron:sync-analytics] FAILED to fetch accounts for user ${user.id}:`, e);
+        // Read this user's connected accounts from OUR DB — this is the tenant boundary
+        const userDbAccounts = await db
+          .select()
+          .from(connectedAccounts)
+          .where(eq(connectedAccounts.userId, user.id));
+
+        const userAccountIds = new Set(
+          userDbAccounts
+            .map((a) => a.zernioAccountId)
+            .filter((id): id is string => id !== null)
+        );
+
+        console.log(
+          `[Cron:sync-analytics] User ${user.email} owns ${userAccountIds.size} accounts in DB: [${[...userAccountIds].join(", ")}]`
+        );
+
+        if (userAccountIds.size === 0) {
+          console.log(`[Cron:sync-analytics] Skipping user ${user.email} — no connected accounts`);
           continue;
         }
 
-        // Sync accounts
-        for (const acct of zernioAccounts) {
-          let [existing] = await db
-            .select()
-            .from(connectedAccounts)
-            .where(
-              and(
-                eq(connectedAccounts.userId, user.id),
-                eq(connectedAccounts.zernioAccountId, acct._id)
-              )
-            )
-            .limit(1);
+        // Update account stats from Zernio data
+        for (const dbAccount of userDbAccounts) {
+          if (!dbAccount.zernioAccountId) continue;
+          const zAcct = zernioAccountMap.get(dbAccount.zernioAccountId);
+          if (!zAcct) continue;
 
-          const followers = extractFollowerCount(acct);
-          const following = acct.metadata?.profileData?.extraData?.followsCount || 0;
-          const totalPosts = acct.metadata?.profileData?.extraData?.mediaCount || 0;
+          const followers = extractFollowerCount(zAcct);
+          const following = zAcct.metadata?.profileData?.extraData?.followsCount || 0;
+          const totalPosts = zAcct.metadata?.profileData?.extraData?.mediaCount || 0;
 
-          if (existing) {
-            await db
-              .update(connectedAccounts)
-              .set({
-                zernioAccountId: acct._id,
-                platformUsername: acct.username || existing.platformUsername,
-                platformDisplayName: acct.displayName,
-                platformAvatarUrl: acct.profilePicture || existing.platformAvatarUrl,
-                followerCount: followers,
-                followingCount: following,
-                totalPosts: totalPosts,
-                lastSyncedAt: new Date(),
-              })
-              .where(eq(connectedAccounts.id, existing.id));
-
-            // Snapshot account analytics
-            await db.insert(accountAnalytics).values({
-              connectedAccountId: existing.id,
+          await db
+            .update(connectedAccounts)
+            .set({
+              platformUsername: zAcct.username || dbAccount.platformUsername,
+              platformDisplayName: zAcct.displayName,
+              platformAvatarUrl: zAcct.profilePicture || dbAccount.platformAvatarUrl,
               followerCount: followers,
               followingCount: following,
               totalPosts: totalPosts,
-            });
-          } else {
-            const [inserted] = await db
-              .insert(connectedAccounts)
-              .values({
-                userId: user.id,
-                platform: acct.platform,
-                zernioAccountId: acct._id,
-                platformUsername: acct.username || null,
-                platformDisplayName: acct.displayName,
-                platformAvatarUrl: acct.profilePicture || null,
-                followerCount: followers,
-                followingCount: following,
-                totalPosts: totalPosts,
-                lastSyncedAt: new Date(),
-              })
-              .returning();
+              lastSyncedAt: new Date(),
+            })
+            .where(eq(connectedAccounts.id, dbAccount.id));
 
-            await db.insert(accountAnalytics).values({
-              connectedAccountId: inserted.id,
-              followerCount: followers,
-              followingCount: following,
-              totalPosts: totalPosts,
-            });
-          }
+          // Snapshot account analytics
+          await db.insert(accountAnalytics).values({
+            connectedAccountId: dbAccount.id,
+            followerCount: followers,
+            followingCount: following,
+            totalPosts: totalPosts,
+          });
         }
-
-        // Build set of this user's Zernio account IDs for filtering analytics
-        const userAccountIds = new Set(
-          zernioAccounts.map((a) => a._id)
-        );
 
         // Sync post analytics — pull last 30 days
         const now = new Date();
@@ -127,20 +115,18 @@ export async function GET(req: NextRequest) {
           const analyticsData = await getAnalytics({ fromDate, toDate, limit: 100 });
           const allEntries = analyticsData.posts || [];
 
-          // CRITICAL: Filter analytics to only posts belonging to this user's accounts/profile
+          // TENANT FILTER: Use our DB's account ownership, NOT Zernio's profileId.
+          // An analytics entry belongs to this user if any of its platform accountIds
+          // are in the user's connected_accounts.
           const postEntries = allEntries.filter((entry) => {
-            // Check if profileId matches
-            if (entry.profileId && entry.profileId === user.zernioProfileKey) return true;
-            // Check if any platform accountId belongs to this user
             if (entry.platforms?.some((p) => userAccountIds.has(p.accountId))) return true;
             return false;
           });
 
           const discardedAnalytics = allEntries.length - postEntries.length;
           if (discardedAnalytics > 0) {
-            console.error(
-              `[Cron:sync-analytics] TENANT FILTER: Discarded ${discardedAnalytics} analytics entries not belonging to profile ${user.zernioProfileKey}. ` +
-              `Kept ${postEntries.length}/${allEntries.length}.`
+            console.log(
+              `[Cron:sync-analytics] Tenant filter: kept ${postEntries.length}/${allEntries.length} analytics entries for ${user.email} (discarded ${discardedAnalytics} belonging to other users)`
             );
           }
           console.log(`[Cron:sync-analytics] Got ${postEntries.length} analytics entries for date range ${fromDate} to ${toDate}`);

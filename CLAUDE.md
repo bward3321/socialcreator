@@ -29,9 +29,11 @@ Pulsr is a SaaS creator analytics + scheduling tool. It aggregates social media 
 - Three Vercel crons: hourly analytics sync, daily trial reminder (14:00 UTC), daily trial expiry (00:05 UTC)
 
 ## Multi-tenant safety (Zernio)
-- **CRITICAL**: Zernio's `GET /v1/accounts` and `GET /v1/analytics` endpoints return ALL data across the entire org, not scoped per profile. Our code MUST filter by the user's `zernioProfileKey` after every Zernio API call.
-- `listAccounts(profileId)` in `client.ts` requires a profileId and filters client-side. Never call it without the user's profile key.
-- Analytics entries are filtered by profileId and accountId set in the cron sync. Any new Zernio integration must follow the same pattern.
+- **CRITICAL**: Zernio's `GET /v1/accounts` and `GET /v1/analytics` endpoints return ALL data across the entire org, not scoped per profile. Account objects do NOT carry a reliable `profileId` field.
+- **Our `connected_accounts` DB table is the tenant boundary.** Each row maps a Zernio account ID to a Pulsr user ID. This is the ONLY source of truth for "which accounts belong to which user."
+- `listAllAccounts()` in `client.ts` fetches ALL org accounts without filtering. Callers must use our DB to determine ownership.
+- The sync route (`/api/zernio/sync`) reads the user's existing `connected_accounts` from the DB, fetches all Zernio accounts, and only updates accounts already owned by the user. Unclaimed accounts (not owned by any user) are assigned to the current user.
+- The cron sync builds each user's account ID set from the DB, then filters Zernio analytics entries by those account IDs.
 - All DB queries on `connected_accounts` and `posts` must include a `userId` filter. Never trust Zernio's response to be pre-scoped.
 
 ## Database

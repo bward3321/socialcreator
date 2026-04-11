@@ -133,14 +133,14 @@ export function extractFollowerCount(acct: ZernioAccount): number {
   return candidates.find((c) => c > 0) ?? 0;
 }
 
-function getProfileId(acct: ZernioAccount): string | undefined {
-  if (!acct.profileId) return undefined;
-  if (typeof acct.profileId === "string") return acct.profileId;
-  return acct.profileId._id;
-}
-
-export async function listAccounts(
-  profileId: string,
+/**
+ * Fetch ALL accounts under the Zernio org API key.
+ *
+ * IMPORTANT: This returns accounts for ALL users in the org, not scoped to a
+ * single profile. Tenant isolation is handled at the caller level using our
+ * connected_accounts DB table as the source of truth for account ownership.
+ */
+export async function listAllAccounts(
   page = 1,
   limit = 100
 ): Promise<ZernioAccount[]> {
@@ -150,21 +150,20 @@ export async function listAccounts(
   });
   const data = await zernioFetch<{ accounts: ZernioAccount[] }>(`/accounts?${params}`);
 
-  // CRITICAL: Zernio's /accounts endpoint returns ALL org-wide accounts.
-  // We MUST filter to only the accounts belonging to this user's profile.
-  const filtered = data.accounts.filter(
-    (acct) => getProfileId(acct) === profileId
-  );
-
-  const discarded = data.accounts.length - filtered.length;
-  if (discarded > 0) {
-    console.error(
-      `[Zernio] TENANT FILTER: Discarded ${discarded} accounts not belonging to profile ${profileId}. ` +
-      `Kept ${filtered.length}/${data.accounts.length}.`
+  // Diagnostic: log the shape of the first account so we can see what fields exist
+  if (data.accounts.length > 0) {
+    console.log(
+      `[Zernio:debug] Account object keys:`,
+      Object.keys(data.accounts[0])
+    );
+    console.log(
+      `[Zernio:debug] First account shape:`,
+      JSON.stringify(data.accounts[0], null, 2)
     );
   }
 
-  return filtered;
+  console.log(`[Zernio] Fetched ${data.accounts.length} total org accounts`);
+  return data.accounts;
 }
 
 export async function getFollowerStats(): Promise<
