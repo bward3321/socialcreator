@@ -2,8 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser, hasAccess } from "@/lib/auth";
 import { uploadMediaToZernio } from "@/lib/zernio/client";
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB (Zernio limit)
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB
+const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB (Zernio presigned upload supports up to 5GB)
+const ALLOWED_IMAGE_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const ALLOWED_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/webm", "video/x-m4v"];
+const ALLOWED_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES];
 
 export async function POST(req: NextRequest) {
   const user = await getCurrentUser();
@@ -27,9 +30,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (file.size > MAX_FILE_SIZE) {
+    const isVideo = file.type.startsWith("video/");
+    const maxSize = isVideo ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+    if (file.size > maxSize) {
       return NextResponse.json(
-        { error: "File too large. Maximum 25MB." },
+        { error: `File too large. Maximum ${isVideo ? "500MB" : "25MB"}.` },
         { status: 400 }
       );
     }

@@ -48,9 +48,10 @@ export default function ComposePage() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
 
-  // Image upload state
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  // Media upload state
+  const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [isVideo, setIsVideo] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -74,37 +75,42 @@ export default function ComposePage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Please select an image file (JPEG, PNG, GIF, or WebP)");
+    const fileIsVideo = file.type.startsWith("video/");
+    const fileIsImage = file.type.startsWith("image/");
+    if (!fileIsImage && !fileIsVideo) {
+      setError("Please select an image or video file");
       return;
     }
-    if (file.size > 25 * 1024 * 1024) {
-      setError("Image must be under 25MB");
+    const maxSize = fileIsVideo ? 500 * 1024 * 1024 : 25 * 1024 * 1024;
+    if (file.size > maxSize) {
+      setError(fileIsVideo ? "Video must be under 500MB" : "Image must be under 25MB");
       return;
     }
 
-    setImageFile(file);
-    setImagePreview(URL.createObjectURL(file));
+    setMediaFile(file);
+    setIsVideo(fileIsVideo);
+    setMediaPreview(URL.createObjectURL(file));
     setUploadedUrl(null);
     setError("");
   }
 
-  function removeImage() {
-    setImageFile(null);
-    if (imagePreview) URL.revokeObjectURL(imagePreview);
-    setImagePreview(null);
+  function removeMedia() {
+    setMediaFile(null);
+    setIsVideo(false);
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+    setMediaPreview(null);
     setUploadedUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function uploadImage(): Promise<string | null> {
-    if (!imageFile) return null;
+  async function uploadMedia(): Promise<string | null> {
+    if (!mediaFile) return null;
     if (uploadedUrl) return uploadedUrl;
 
     setUploading(true);
     try {
       const formData = new FormData();
-      formData.append("file", imageFile);
+      formData.append("file", mediaFile);
 
       const res = await fetch("/api/upload", {
         method: "POST",
@@ -117,7 +123,7 @@ export default function ComposePage() {
       setUploadedUrl(data.url);
       return data.url;
     } catch (e) {
-      throw new Error(`Image upload failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+      throw new Error(`Upload failed: ${e instanceof Error ? e.message : "Unknown error"}`);
     } finally {
       setUploading(false);
     }
@@ -129,8 +135,8 @@ export default function ComposePage() {
     setSuccess(false);
 
     try {
-      // Upload image first if one is selected
-      const mediaUrl = await uploadImage();
+      // Upload media first if a file is selected
+      const mediaUrl = await uploadMedia();
 
       const res = await fetch("/api/posts/create", {
         method: "POST",
@@ -152,7 +158,7 @@ export default function ComposePage() {
       setContent("");
       setSelectedPlatforms([]);
       setScheduledFor("");
-      removeImage();
+      removeMedia();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -190,27 +196,35 @@ export default function ComposePage() {
             </p>
           </div>
 
-          {/* Image upload */}
+          {/* Media upload */}
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
-              Image (optional)
+              Media (optional)
             </label>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/jpeg,image/png,image/gif,image/webp"
+              accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/x-m4v"
               onChange={handleFileSelect}
               className="hidden"
             />
-            {imagePreview ? (
+            {mediaPreview ? (
               <div className="relative inline-block">
-                <img
-                  src={imagePreview}
-                  alt="Upload preview"
-                  className="max-h-48 rounded-lg border border-border"
-                />
+                {isVideo ? (
+                  <video
+                    src={mediaPreview}
+                    controls
+                    className="max-h-48 rounded-lg border border-border"
+                  />
+                ) : (
+                  <img
+                    src={mediaPreview}
+                    alt="Upload preview"
+                    className="max-h-48 rounded-lg border border-border"
+                  />
+                )}
                 <button
-                  onClick={removeImage}
+                  onClick={removeMedia}
                   className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-zinc-800 border border-border flex items-center justify-center hover:bg-zinc-700 transition-colors"
                 >
                   <X className="w-3.5 h-3.5 text-zinc-400" />
@@ -227,7 +241,7 @@ export default function ComposePage() {
                 className="flex items-center gap-2 px-4 py-3 rounded-lg border border-dashed border-border bg-surface text-sm text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 transition-colors cursor-pointer"
               >
                 <ImagePlus className="w-4 h-4" />
-                Add an image
+                Add an image or video
               </button>
             )}
           </div>
@@ -357,12 +371,20 @@ export default function ComposePage() {
                         </p>
                       </div>
                     </div>
-                    {imagePreview && (
-                      <img
-                        src={imagePreview}
-                        alt="Preview"
-                        className="w-full max-h-64 object-cover rounded-lg mb-3"
-                      />
+                    {mediaPreview && (
+                      isVideo ? (
+                        <video
+                          src={mediaPreview}
+                          controls
+                          className="w-full max-h-64 rounded-lg mb-3"
+                        />
+                      ) : (
+                        <img
+                          src={mediaPreview}
+                          alt="Preview"
+                          className="w-full max-h-64 object-cover rounded-lg mb-3"
+                        />
+                      )
                     )}
                     <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
                       {content || (
