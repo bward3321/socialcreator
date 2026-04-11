@@ -8,7 +8,7 @@ import {
   accountAnalytics,
 } from "@/lib/db/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
-import { listAccounts, getAnalytics } from "@/lib/zernio/client";
+import { listAccounts, getAnalytics, extractFollowerCount } from "@/lib/zernio/client";
 
 function verifyCron(req: NextRequest): boolean {
   const auth = req.headers.get("authorization");
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
             )
             .limit(1);
 
-          const followers = acct.metadata?.profileData?.followersCount || 0;
+          const followers = extractFollowerCount(acct);
           const following = acct.metadata?.profileData?.extraData?.followsCount || 0;
           const totalPosts = acct.metadata?.profileData?.extraData?.mediaCount || 0;
 

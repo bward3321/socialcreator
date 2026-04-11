@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Send, Calendar, Clock } from "lucide-react";
+import { Send, Calendar, Clock, ImagePlus, X } from "lucide-react";
 
 type Account = {
   id: string;
   platform: string;
   platformUsername: string | null;
   platformDisplayName: string | null;
+  zernioAccountId: string | null;
 };
 
 const platformColors: Record<string, string> = {
@@ -47,6 +48,13 @@ export default function ComposePage() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
 
+  // Image upload state
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     fetch("/api/zernio/sync")
       .then((r) => r.json())
@@ -62,12 +70,68 @@ export default function ComposePage() {
     );
   }
 
+  function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setError("Please select an image file (JPEG, PNG, GIF, or WebP)");
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setError("Image must be under 25MB");
+      return;
+    }
+
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setUploadedUrl(null);
+    setError("");
+  }
+
+  function removeImage() {
+    setImageFile(null);
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImagePreview(null);
+    setUploadedUrl(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function uploadImage(): Promise<string | null> {
+    if (!imageFile) return null;
+    if (uploadedUrl) return uploadedUrl;
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", imageFile);
+
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      setUploadedUrl(data.url);
+      return data.url;
+    } catch (e) {
+      throw new Error(`Image upload failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function handleSubmit(scheduleMode: boolean) {
     setLoading(true);
     setError("");
     setSuccess(false);
 
     try {
+      // Upload image first if one is selected
+      const mediaUrl = await uploadImage();
+
       const res = await fetch("/api/posts/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -75,11 +139,12 @@ export default function ComposePage() {
           content,
           platforms: selectedPlatforms,
           scheduledFor: scheduleMode && scheduledFor ? scheduledFor : null,
+          mediaUrls: mediaUrl ? [mediaUrl] : [],
         }),
       });
 
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
         throw new Error(data.error || "Failed to create post");
       }
 
@@ -87,6 +152,7 @@ export default function ComposePage() {
       setContent("");
       setSelectedPlatforms([]);
       setScheduledFor("");
+      removeImage();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -122,6 +188,48 @@ export default function ComposePage() {
             <p className="text-xs text-zinc-600 mt-1">
               {content.length} characters
             </p>
+          </div>
+
+          {/* Image upload */}
+          <div>
+            <label className="block text-sm font-medium text-zinc-400 mb-2">
+              Image (optional)
+            </label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            {imagePreview ? (
+              <div className="relative inline-block">
+                <img
+                  src={imagePreview}
+                  alt="Upload preview"
+                  className="max-h-48 rounded-lg border border-border"
+                />
+                <button
+                  onClick={removeImage}
+                  className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-zinc-800 border border-border flex items-center justify-center hover:bg-zinc-700 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5 text-zinc-400" />
+                </button>
+                {uploading && (
+                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                    <p className="text-xs text-white">Uploading...</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-2 px-4 py-3 rounded-lg border border-dashed border-border bg-surface text-sm text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 transition-colors cursor-pointer"
+              >
+                <ImagePlus className="w-4 h-4" />
+                Add an image
+              </button>
+            )}
           </div>
 
           {/* Platform selector */}
@@ -249,6 +357,13 @@ export default function ComposePage() {
                         </p>
                       </div>
                     </div>
+                    {imagePreview && (
+                      <img
+                        src={imagePreview}
+                        alt="Preview"
+                        className="w-full max-h-64 object-cover rounded-lg mb-3"
+                      />
+                    )}
                     <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
                       {content || (
                         <span className="text-zinc-600 italic">

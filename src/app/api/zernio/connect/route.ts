@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const result = await generateConnectUrl(
       platform,
       user.zernioProfileKey,
-      `${getAppUrl()}/connect?connected=true`
+      `${getAppUrl()}/connect/callback?connected=true`
     );
     return NextResponse.json({ authUrl: result.authUrl });
   } catch (e) {

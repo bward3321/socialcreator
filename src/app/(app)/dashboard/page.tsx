@@ -1,12 +1,11 @@
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { connectedAccounts, posts, postAnalytics } from "@/lib/db/schema";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, and, gte } from "drizzle-orm";
 import { formatNumber } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  TrendingUp,
   Eye,
   Heart,
   MessageCircle,
@@ -16,6 +15,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { DateRangeSelector } from "./date-range-selector";
 
 const platformColors: Record<string, string> = {
   twitter: "#1DA1F2",
@@ -30,9 +30,38 @@ const platformColors: Record<string, string> = {
   threads: "#000000",
 };
 
-export default async function DashboardPage() {
+const METRIC_DESCRIPTIONS: Record<string, string> = {
+  Views: "Sum of TikTok views, Instagram plays, YouTube views, Twitter/X impressions, LinkedIn impressions",
+  Likes: "Sum of likes across all connected platforms",
+  Comments: "Sum of comments and replies across all connected platforms",
+  Shares: "Sum of shares, retweets, and reposts across all connected platforms",
+};
+
+// Each platform's "top metric" label for the per-platform breakdown
+const platformTopMetric: Record<string, string> = {
+  tiktok: "views",
+  youtube: "views",
+  instagram: "likes",
+  twitter: "impressions",
+  linkedin: "impressions",
+  facebook: "reach",
+  pinterest: "saves",
+  reddit: "comments",
+  bluesky: "likes",
+  threads: "likes",
+};
+
+type Props = {
+  searchParams: Promise<{ range?: string }>;
+};
+
+export default async function DashboardPage({ searchParams }: Props) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const params = await searchParams;
+  const range = params.range || "30";
+  const days = range === "all" ? null : parseInt(range, 10) || 30;
 
   const accounts = await db
     .select()
@@ -44,20 +73,31 @@ export default async function DashboardPage() {
     0
   );
 
-  // Aggregate post analytics
-  const userPosts = await db
+  // Fetch posts within date range
+  const postQuery = db
     .select()
     .from(posts)
-    .where(eq(posts.userId, user.id))
+    .where(
+      days
+        ? and(
+            eq(posts.userId, user.id),
+            gte(posts.createdAt, new Date(Date.now() - days * 24 * 60 * 60 * 1000))
+          )
+        : eq(posts.userId, user.id)
+    )
     .orderBy(desc(posts.createdAt))
-    .limit(10);
+    .limit(100);
 
+  const userPosts = await postQuery;
   const postIds = userPosts.map((p) => p.id);
 
   let totalViews = 0;
   let totalLikes = 0;
   let totalComments = 0;
   let totalShares = 0;
+
+  // Per-platform analytics aggregation
+  const platformStats: Record<string, { views: number; likes: number; comments: number; shares: number; impressions: number; reach: number; saves: number; postCount: number }> = {};
 
   if (postIds.length > 0) {
     const [agg] = await db
@@ -74,17 +114,50 @@ export default async function DashboardPage() {
     totalLikes = Number(agg?.likes || 0);
     totalComments = Number(agg?.comments || 0);
     totalShares = Number(agg?.shares || 0);
+
+    // Per-platform breakdown
+    const platAgg = await db
+      .select({
+        platform: postAnalytics.platform,
+        views: sql<number>`COALESCE(SUM(${postAnalytics.views}), 0)`,
+        likes: sql<number>`COALESCE(SUM(${postAnalytics.likes}), 0)`,
+        comments: sql<number>`COALESCE(SUM(${postAnalytics.comments}), 0)`,
+        shares: sql<number>`COALESCE(SUM(${postAnalytics.shares}), 0)`,
+        impressions: sql<number>`COALESCE(SUM(${postAnalytics.impressions}), 0)`,
+        reach: sql<number>`COALESCE(SUM(${postAnalytics.reach}), 0)`,
+        saves: sql<number>`COALESCE(SUM(${postAnalytics.saves}), 0)`,
+        postCount: sql<number>`COUNT(DISTINCT ${postAnalytics.postId})`,
+      })
+      .from(postAnalytics)
+      .where(sql`${postAnalytics.postId} IN ${postIds}`)
+      .groupBy(postAnalytics.platform);
+
+    for (const row of platAgg) {
+      platformStats[row.platform] = {
+        views: Number(row.views),
+        likes: Number(row.likes),
+        comments: Number(row.comments),
+        shares: Number(row.shares),
+        impressions: Number(row.impressions),
+        reach: Number(row.reach),
+        saves: Number(row.saves),
+        postCount: Number(row.postCount),
+      };
+    }
   }
 
   const isEmpty = accounts.length === 0;
 
   return (
     <div>
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-zinc-100">Dashboard</h1>
-        <p className="text-sm text-zinc-500">
-          Your creator analytics at a glance.
-        </p>
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-100">Dashboard</h1>
+          <p className="text-sm text-zinc-500">
+            Your creator analytics at a glance.
+          </p>
+        </div>
+        {!isEmpty && <DateRangeSelector current={range} />}
       </div>
 
       {isEmpty ? (
@@ -107,21 +180,25 @@ export default async function DashboardPage() {
               icon={Eye}
               label="Views"
               value={totalViews}
+              tooltip={METRIC_DESCRIPTIONS.Views}
             />
             <StatCard
               icon={Heart}
               label="Likes"
               value={totalLikes}
+              tooltip={METRIC_DESCRIPTIONS.Likes}
             />
             <StatCard
               icon={MessageCircle}
               label="Comments"
               value={totalComments}
+              tooltip={METRIC_DESCRIPTIONS.Comments}
             />
             <StatCard
               icon={Share2}
               label="Shares"
               value={totalShares}
+              tooltip={METRIC_DESCRIPTIONS.Shares}
             />
           </div>
 
@@ -130,33 +207,57 @@ export default async function DashboardPage() {
             Connected Platforms
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-10">
-            {accounts.map((account) => (
-              <Card key={account.id} className="flex items-center gap-4">
-                <div
-                  className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
-                  style={{
-                    backgroundColor:
-                      platformColors[account.platform] || "#6B7280",
-                  }}
-                >
-                  {account.platform.charAt(0).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-zinc-200 capitalize">
-                    {account.platform}
-                  </p>
-                  <p className="text-xs text-zinc-500 truncate">
-                    @{account.platformUsername || "connected"}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold font-mono text-zinc-100">
-                    {formatNumber(account.followerCount)}
-                  </p>
-                  <p className="text-xs text-zinc-500">followers</p>
-                </div>
-              </Card>
-            ))}
+            {accounts.map((account) => {
+              const stats = platformStats[account.platform];
+              const topMetricKey = platformTopMetric[account.platform] || "views";
+              const topMetricValue = stats
+                ? stats[topMetricKey as keyof typeof stats] ?? 0
+                : 0;
+
+              return (
+                <Card key={account.id}>
+                  <div className="flex items-center gap-4">
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
+                      style={{
+                        backgroundColor:
+                          platformColors[account.platform] || "#6B7280",
+                      }}
+                    >
+                      {account.platform.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-zinc-200 capitalize">
+                        {account.platform}
+                      </p>
+                      <p className="text-xs text-zinc-500 truncate">
+                        @{account.platformUsername || "connected"}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      {account.followerCount > 0 ? (
+                        <>
+                          <p className="text-lg font-bold font-mono text-zinc-100">
+                            {formatNumber(account.followerCount)}
+                          </p>
+                          <p className="text-xs text-zinc-500">followers</p>
+                        </>
+                      ) : (
+                        <Badge variant="success">Connected</Badge>
+                      )}
+                    </div>
+                  </div>
+                  {stats && stats.postCount > 0 && (
+                    <div className="flex items-center gap-4 mt-3 pt-3 border-t border-border text-xs text-zinc-500">
+                      <span>{stats.postCount} posts synced</span>
+                      <span className="capitalize">
+                        {formatNumber(Number(topMetricValue))} {topMetricKey}
+                      </span>
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
           </div>
 
           {/* Recent posts */}
@@ -200,10 +301,12 @@ function StatCard({
   icon: Icon,
   label,
   value,
+  tooltip,
 }: {
   icon: React.ElementType;
   label: string;
   value: number;
+  tooltip?: string;
 }) {
   return (
     <Card>
@@ -212,6 +315,16 @@ function StatCard({
           <Icon className="w-4 h-4 text-purple" />
         </div>
         <span className="text-sm text-zinc-500">{label}</span>
+        {tooltip && (
+          <span className="group relative ml-auto">
+            <span className="w-4 h-4 rounded-full bg-surface border border-border flex items-center justify-center text-[10px] text-zinc-500 cursor-help">
+              i
+            </span>
+            <span className="absolute bottom-full right-0 mb-2 w-64 p-2 rounded-lg bg-zinc-800 border border-border text-xs text-zinc-300 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity z-10">
+              {tooltip}
+            </span>
+          </span>
+        )}
       </div>
       <p className="text-3xl font-bold font-mono text-zinc-100">
         {formatNumber(value)}

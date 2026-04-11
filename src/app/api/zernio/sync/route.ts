@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
-import { listAccounts } from "@/lib/zernio/client";
+import { listAccounts, extractFollowerCount } from "@/lib/zernio/client";
 import { db } from "@/lib/db";
 import { connectedAccounts } from "@/lib/db/schema";
 import { eq, and } from "drizzle-orm";
@@ -30,7 +30,7 @@ export async function GET() {
         )
         .limit(1);
 
-      const followers = acct.metadata?.profileData?.followersCount || 0;
+      const followers = extractFollowerCount(acct);
       const following = acct.metadata?.profileData?.extraData?.followsCount || 0;
       const totalPosts = acct.metadata?.profileData?.extraData?.mediaCount || 0;
 

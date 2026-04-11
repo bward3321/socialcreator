@@ -88,14 +88,50 @@ export type ZernioAccount = {
   metadata?: {
     profileData?: {
       followersCount?: number;
+      fanCount?: number;
+      fan_count?: number;
+      subscriberCount?: number;
+      subscriber_count?: number;
+      connectionsCount?: number;
+      connections_count?: number;
       bio?: string;
       extraData?: {
         followsCount?: number;
         mediaCount?: number;
+        likes?: number;
       };
     };
   };
 };
+
+/**
+ * Extract follower count from a Zernio account, handling platform-specific field names.
+ * Facebook uses fan_count/fanCount, YouTube uses subscriberCount, etc.
+ */
+export function extractFollowerCount(acct: ZernioAccount): number {
+  const pd = acct.metadata?.profileData;
+  if (!pd) return 0;
+
+  // Log raw data for debugging platform-specific fields
+  console.log(
+    `[Zernio:debug] Raw profileData for ${acct.platform} (${acct.displayName}):`,
+    JSON.stringify(pd, null, 2)
+  );
+
+  // Try platform-specific fields first, then generic followersCount
+  const candidates: number[] = [
+    pd.followersCount ?? 0,
+    pd.fanCount ?? 0,
+    pd.fan_count ?? 0,
+    pd.subscriberCount ?? 0,
+    pd.subscriber_count ?? 0,
+    pd.connectionsCount ?? 0,
+    pd.connections_count ?? 0,
+  ];
+
+  // Return the first non-zero value, or 0 if all are zero
+  return candidates.find((c) => c > 0) ?? 0;
+}
 
 function getProfileId(acct: ZernioAccount): string | undefined {
   if (!acct.profileId) return undefined;
@@ -270,6 +306,39 @@ export async function getAnalytics(opts: {
   if (opts.page) params.set("page", String(opts.page));
   if (opts.limit) params.set("limit", String(opts.limit));
   return zernioFetch<AnalyticsResponse>(`/analytics?${params}`);
+}
+
+// --- Media Upload ---
+
+export type MediaUploadResponse = {
+  uploadUrl: string;
+  publicUrl: string;
+};
+
+export async function getMediaUploadUrl(): Promise<MediaUploadResponse> {
+  return zernioFetch<MediaUploadResponse>("/media/get-media-presigned-url");
+}
+
+export async function uploadMediaToZernio(
+  fileBuffer: ArrayBuffer,
+  contentType: string
+): Promise<string> {
+  const { uploadUrl, publicUrl } = await getMediaUploadUrl();
+
+  const putRes = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: new Uint8Array(fileBuffer),
+  });
+
+  if (!putRes.ok) {
+    const text = await putRes.text();
+    console.error(`[Zernio] Media upload PUT failed ${putRes.status}: ${text}`);
+    throw new Error(`Media upload failed: ${putRes.status}`);
+  }
+
+  console.log(`[Zernio] Media uploaded successfully: ${publicUrl}`);
+  return publicUrl;
 }
 
 // --- Webhooks ---
