@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Send, Calendar, Clock, ImagePlus, X } from "lucide-react";
+import { Send, Calendar, Clock, ImagePlus, X, AlertCircle, Layers } from "lucide-react";
 
 type Account = {
   id: string;
@@ -11,6 +11,13 @@ type Account = {
   platformUsername: string | null;
   platformDisplayName: string | null;
   zernioAccountId: string | null;
+};
+
+type MediaItem = {
+  file: File;
+  previewUrl: string;
+  isVideo: boolean;
+  uploadedUrl: string | null;
 };
 
 const platformColors: Record<string, string> = {
@@ -39,6 +46,34 @@ const platformLimits: Record<string, number> = {
   threads: 500,
 };
 
+// Max media items per post, per platform
+const platformMediaMax: Record<string, number> = {
+  twitter: 4,
+  instagram: 10,
+  facebook: 10,
+  linkedin: 9,
+  tiktok: 1,
+  youtube: 1,
+  pinterest: 1,
+  reddit: 1,
+  bluesky: 4,
+  threads: 10,
+};
+
+// Platforms that REQUIRE media
+const platformRequiresMedia: Record<string, "any" | "video" | null> = {
+  instagram: "any",
+  tiktok: "video",
+  youtube: "video",
+  pinterest: "any",
+  twitter: null,
+  facebook: null,
+  linkedin: null,
+  bluesky: null,
+  threads: null,
+  reddit: null,
+};
+
 export default function ComposePage() {
   const [content, setContent] = useState("");
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
@@ -48,12 +83,8 @@ export default function ComposePage() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
 
-  // Media upload state
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
-  const [isVideo, setIsVideo] = useState(false);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -62,6 +93,30 @@ export default function ComposePage() {
       .then((d) => setAccounts(d.accounts || []))
       .catch(() => {});
   }, []);
+
+  // Derived limits from selected platforms
+  const mediaLimit = selectedPlatforms.length
+    ? Math.min(...selectedPlatforms.map((p) => platformMediaMax[p] ?? 10))
+    : 10;
+  const limitingPlatform = selectedPlatforms
+    .slice()
+    .sort((a, b) => (platformMediaMax[a] ?? 10) - (platformMediaMax[b] ?? 10))[0];
+
+  const hasVideo = mediaItems.some((m) => m.isVideo);
+  const hasImage = mediaItems.some((m) => !m.isVideo);
+  const hasAnyMedia = mediaItems.length > 0;
+
+  // Pre-flight: platforms that will be rejected
+  const blockedPlatforms = selectedPlatforms.filter((p) => {
+    const req = platformRequiresMedia[p];
+    if (!req) return false;
+    if (req === "any" && !hasAnyMedia) return true;
+    if (req === "video" && !hasVideo) return true;
+    return false;
+  });
+  const postablePlatforms = selectedPlatforms.filter(
+    (p) => !blockedPlatforms.includes(p)
+  );
 
   function togglePlatform(platform: string) {
     setSelectedPlatforms((prev) =>
@@ -72,58 +127,89 @@ export default function ComposePage() {
   }
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
 
-    const fileIsVideo = file.type.startsWith("video/");
-    const fileIsImage = file.type.startsWith("image/");
-    if (!fileIsImage && !fileIsVideo) {
-      setError("Please select an image or video file");
-      return;
+    const newItems: MediaItem[] = [];
+    for (const file of files) {
+      const fileIsVideo = file.type.startsWith("video/");
+      const fileIsImage = file.type.startsWith("image/");
+      if (!fileIsImage && !fileIsVideo) {
+        setError(`Unsupported file type: ${file.name}`);
+        continue;
+      }
+      const maxSize = fileIsVideo ? 500 * 1024 * 1024 : 25 * 1024 * 1024;
+      if (file.size > maxSize) {
+        setError(
+          `${file.name} too large (${fileIsVideo ? "max 500MB" : "max 25MB"})`
+        );
+        continue;
+      }
+      newItems.push({
+        file,
+        previewUrl: URL.createObjectURL(file),
+        isVideo: fileIsVideo,
+        uploadedUrl: null,
+      });
     }
-    const maxSize = fileIsVideo ? 500 * 1024 * 1024 : 25 * 1024 * 1024;
-    if (file.size > maxSize) {
-      setError(fileIsVideo ? "Video must be under 500MB" : "Image must be under 25MB");
-      return;
-    }
 
-    setMediaFile(file);
-    setIsVideo(fileIsVideo);
-    setMediaPreview(URL.createObjectURL(file));
-    setUploadedUrl(null);
-    setError("");
-  }
+    setMediaItems((prev) => {
+      const combined = [...prev, ...newItems];
+      if (combined.length > mediaLimit) {
+        setError(`Max ${mediaLimit} media items for selected platforms`);
+        return combined.slice(0, mediaLimit);
+      }
+      setError("");
+      return combined;
+    });
 
-  function removeMedia() {
-    setMediaFile(null);
-    setIsVideo(false);
-    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
-    setMediaPreview(null);
-    setUploadedUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function uploadMedia(): Promise<string | null> {
-    if (!mediaFile) return null;
-    if (uploadedUrl) return uploadedUrl;
+  function removeMedia(idx: number) {
+    setMediaItems((prev) => {
+      const next = [...prev];
+      URL.revokeObjectURL(next[idx].previewUrl);
+      next.splice(idx, 1);
+      return next;
+    });
+  }
 
+  function resetMedia() {
+    mediaItems.forEach((m) => URL.revokeObjectURL(m.previewUrl));
+    setMediaItems([]);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  async function uploadAll(): Promise<
+    { type: "image" | "video"; url: string; mimeType: string }[]
+  > {
+    if (mediaItems.length === 0) return [];
     setUploading(true);
     try {
-      const formData = new FormData();
-      formData.append("file", mediaFile);
-
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-
-      setUploadedUrl(data.url);
-      return data.url;
-    } catch (e) {
-      throw new Error(`Upload failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+      const results = await Promise.all(
+        mediaItems.map(async (m) => {
+          if (m.uploadedUrl) {
+            return {
+              type: m.isVideo ? "video" as const : "image" as const,
+              url: m.uploadedUrl,
+              mimeType: m.file.type,
+            };
+          }
+          const fd = new FormData();
+          fd.append("file", m.file);
+          const res = await fetch("/api/upload", { method: "POST", body: fd });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Upload failed");
+          console.log(`[compose] Uploaded ${m.file.name} -> ${data.url}`);
+          return {
+            type: data.type as "image" | "video",
+            url: data.url as string,
+            mimeType: data.mimeType as string,
+          };
+        })
+      );
+      return results;
     } finally {
       setUploading(false);
     }
@@ -135,30 +221,34 @@ export default function ComposePage() {
     setSuccess(false);
 
     try {
-      // Upload media first if a file is selected
-      const mediaUrl = await uploadMedia();
+      if (postablePlatforms.length === 0) {
+        throw new Error(
+          "No platforms can receive this post. Attach required media."
+        );
+      }
+
+      const media = await uploadAll();
+      console.log(`[compose] submit platforms=${postablePlatforms.join(",")} media=${media.length}`);
 
       const res = await fetch("/api/posts/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content,
-          platforms: selectedPlatforms,
+          platforms: postablePlatforms,
           scheduledFor: scheduleMode && scheduledFor ? scheduledFor : null,
-          mediaUrls: mediaUrl ? [mediaUrl] : [],
+          media,
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to create post");
-      }
+      if (!res.ok) throw new Error(data.error || "Failed to create post");
 
       setSuccess(true);
       setContent("");
       setSelectedPlatforms([]);
       setScheduledFor("");
-      removeMedia();
+      resetMedia();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -167,6 +257,7 @@ export default function ComposePage() {
   }
 
   const connectedPlatforms = [...new Set(accounts.map((a) => a.platform))];
+  const canAddMore = mediaItems.length < mediaLimit;
 
   return (
     <div>
@@ -178,9 +269,7 @@ export default function ComposePage() {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-8">
-        {/* Left: Editor */}
         <div className="space-y-6">
-          {/* Content */}
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
               Content
@@ -196,7 +285,6 @@ export default function ComposePage() {
             </p>
           </div>
 
-          {/* Media upload */}
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
               Media (optional)
@@ -204,49 +292,65 @@ export default function ComposePage() {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/x-m4v"
               onChange={handleFileSelect}
               className="hidden"
             />
-            {mediaPreview ? (
-              <div className="relative inline-block">
-                {isVideo ? (
-                  <video
-                    src={mediaPreview}
-                    controls
-                    className="max-h-48 rounded-lg border border-border"
-                  />
-                ) : (
-                  <img
-                    src={mediaPreview}
-                    alt="Upload preview"
-                    className="max-h-48 rounded-lg border border-border"
-                  />
-                )}
-                <button
-                  onClick={removeMedia}
-                  className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-zinc-800 border border-border flex items-center justify-center hover:bg-zinc-700 transition-colors"
-                >
-                  <X className="w-3.5 h-3.5 text-zinc-400" />
-                </button>
-                {uploading && (
-                  <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
-                    <p className="text-xs text-white">Uploading...</p>
+
+            {mediaItems.length > 0 && (
+              <div className="flex flex-wrap gap-3 mb-3">
+                {mediaItems.map((m, i) => (
+                  <div key={i} className="relative">
+                    {m.isVideo ? (
+                      <video
+                        src={m.previewUrl}
+                        className="w-24 h-24 object-cover rounded-lg border border-border"
+                      />
+                    ) : (
+                      <img
+                        src={m.previewUrl}
+                        alt={`Media ${i + 1}`}
+                        className="w-24 h-24 object-cover rounded-lg border border-border"
+                      />
+                    )}
+                    <button
+                      onClick={() => removeMedia(i)}
+                      className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-zinc-800 border border-border flex items-center justify-center hover:bg-zinc-700 transition-colors"
+                      aria-label={`Remove ${m.file.name}`}
+                    >
+                      <X className="w-3.5 h-3.5 text-zinc-400" />
+                    </button>
+                    {uploading && !m.uploadedUrl && (
+                      <div className="absolute inset-0 bg-black/50 rounded-lg flex items-center justify-center">
+                        <p className="text-[10px] text-white">Uploading...</p>
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-            ) : (
+            )}
+
+            {canAddMore && (
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="flex items-center gap-2 px-4 py-3 rounded-lg border border-dashed border-border bg-surface text-sm text-zinc-500 hover:border-zinc-500 hover:text-zinc-400 transition-colors cursor-pointer"
               >
                 <ImagePlus className="w-4 h-4" />
-                Add an image or video
+                {mediaItems.length === 0 ? "Add images or a video" : "Add more"}
               </button>
+            )}
+
+            {selectedPlatforms.length > 0 && (
+              <p className="text-xs text-zinc-600 mt-2">
+                {mediaItems.length}/{mediaLimit} media
+                {limitingPlatform && mediaLimit < 10 ? (
+                  <> — limited by <span className="capitalize">{limitingPlatform}</span></>
+                ) : null}
+              </p>
             )}
           </div>
 
-          {/* Platform selector */}
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
               Platforms
@@ -287,7 +391,32 @@ export default function ComposePage() {
             )}
           </div>
 
-          {/* Schedule */}
+          {blockedPlatforms.length > 0 && (
+            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-300">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+              <div>
+                <p className="font-medium capitalize">
+                  {blockedPlatforms.join(", ")} require
+                  {blockedPlatforms.some(
+                    (p) => platformRequiresMedia[p] === "video"
+                  )
+                    ? " video"
+                    : " media"}
+                  .
+                </p>
+                {postablePlatforms.length > 0 ? (
+                  <p className="text-amber-300/80">
+                    Will post to {postablePlatforms.join(", ")} only.
+                  </p>
+                ) : (
+                  <p className="text-amber-300/80">
+                    Attach {blockedPlatforms.some((p) => platformRequiresMedia[p] === "video") ? "a video" : "an image or video"} to post.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
               <Calendar className="w-3.5 h-3.5 inline mr-1" />
@@ -301,7 +430,6 @@ export default function ComposePage() {
             />
           </div>
 
-          {/* Actions */}
           {error && <p className="text-sm text-danger">{error}</p>}
           {success && (
             <p className="text-sm text-accent">Post created successfully!</p>
@@ -310,8 +438,12 @@ export default function ComposePage() {
           <div className="flex items-center gap-3">
             <Button
               onClick={() => handleSubmit(false)}
-              loading={loading}
-              disabled={!content || selectedPlatforms.length === 0}
+              loading={loading || uploading}
+              disabled={
+                !content ||
+                selectedPlatforms.length === 0 ||
+                postablePlatforms.length === 0
+              }
             >
               <Send className="w-4 h-4" />
               Post now
@@ -319,9 +451,12 @@ export default function ComposePage() {
             <Button
               variant="secondary"
               onClick={() => handleSubmit(true)}
-              loading={loading}
+              loading={loading || uploading}
               disabled={
-                !content || selectedPlatforms.length === 0 || !scheduledFor
+                !content ||
+                selectedPlatforms.length === 0 ||
+                postablePlatforms.length === 0 ||
+                !scheduledFor
               }
             >
               <Clock className="w-4 h-4" />
@@ -330,7 +465,6 @@ export default function ComposePage() {
           </div>
         </div>
 
-        {/* Right: Live previews */}
         <div>
           <h3 className="text-sm font-medium text-zinc-400 mb-4">
             Live Preview
@@ -349,9 +483,12 @@ export default function ComposePage() {
                 const account = accounts.find(
                   (a) => a.platform === platform
                 );
+                const first = mediaItems[0];
+                const isCarousel = mediaItems.length > 1;
+                const willSkip = blockedPlatforms.includes(platform);
 
                 return (
-                  <Card key={platform}>
+                  <Card key={platform} className={willSkip ? "opacity-50" : ""}>
                     <div className="flex items-center gap-3 mb-3">
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs"
@@ -362,7 +499,7 @@ export default function ComposePage() {
                       >
                         {platform.charAt(0).toUpperCase()}
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <p className="text-sm font-semibold text-zinc-200 capitalize">
                           {platform}
                         </p>
@@ -370,21 +507,34 @@ export default function ComposePage() {
                           @{account?.platformUsername || "you"}
                         </p>
                       </div>
+                      {willSkip && (
+                        <span className="text-[10px] text-amber-300 uppercase tracking-wider">
+                          Skipped
+                        </span>
+                      )}
                     </div>
-                    {mediaPreview && (
-                      isVideo ? (
-                        <video
-                          src={mediaPreview}
-                          controls
-                          className="w-full max-h-64 rounded-lg mb-3"
-                        />
-                      ) : (
-                        <img
-                          src={mediaPreview}
-                          alt="Preview"
-                          className="w-full max-h-64 object-cover rounded-lg mb-3"
-                        />
-                      )
+                    {first && (
+                      <div className="relative mb-3">
+                        {first.isVideo ? (
+                          <video
+                            src={first.previewUrl}
+                            controls
+                            className="w-full max-h-64 rounded-lg"
+                          />
+                        ) : (
+                          <img
+                            src={first.previewUrl}
+                            alt="Preview"
+                            className="w-full max-h-64 object-cover rounded-lg"
+                          />
+                        )}
+                        {isCarousel && (
+                          <div className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded-full bg-black/70 text-[10px] text-white">
+                            <Layers className="w-3 h-3" />
+                            1/{mediaItems.length}
+                          </div>
+                        )}
+                      </div>
                     )}
                     <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words">
                       {content || (

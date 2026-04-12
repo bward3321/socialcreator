@@ -15,7 +15,7 @@ const PLATFORMS = [
   { id: "youtube", name: "YouTube", color: "#FF0000" },
   { id: "pinterest", name: "Pinterest", color: "#E60023" },
   { id: "reddit", name: "Reddit", color: "#FF4500" },
-  { id: "bluesky", name: "Bluesky", color: "#0085FF", hint: "Bluesky requires a separate login — this is normal (they use app passwords instead of OAuth)." },
+  { id: "bluesky", name: "Bluesky", color: "#0085FF", hint: "Bluesky uses app passwords (not OAuth). You'll paste your handle + app password." },
   { id: "threads", name: "Threads", color: "#000000" },
 ];
 
@@ -36,6 +36,11 @@ export default function ConnectPage() {
   const [requestPlatform, setRequestPlatform] = useState("");
   const [requestSending, setRequestSending] = useState(false);
   const [requestSent, setRequestSent] = useState(false);
+  const [blueskyOpen, setBlueskyOpen] = useState(false);
+  const [bskyHandle, setBskyHandle] = useState("");
+  const [bskyPassword, setBskyPassword] = useState("");
+  const [bskySubmitting, setBskySubmitting] = useState(false);
+  const [bskyError, setBskyError] = useState("");
 
   const fetchAccounts = useCallback(async () => {
     setLoading(true);
@@ -68,7 +73,39 @@ export default function ConnectPage() {
     return () => window.removeEventListener("message", handleMessage);
   }, [fetchAccounts]);
 
+  async function handleBlueskySubmit() {
+    if (!bskyHandle.trim() || !bskyPassword.trim()) return;
+    setBskySubmitting(true);
+    setBskyError("");
+    try {
+      const res = await fetch("/api/zernio/connect-bluesky", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: bskyHandle.trim(),
+          appPassword: bskyPassword.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Connect failed");
+      setBlueskyOpen(false);
+      setBskyHandle("");
+      setBskyPassword("");
+      setJustConnected(true);
+      await fetchAccounts();
+      setTimeout(() => setJustConnected(false), 3000);
+    } catch (e) {
+      setBskyError(e instanceof Error ? e.message : "Connect failed");
+    } finally {
+      setBskySubmitting(false);
+    }
+  }
+
   async function handleConnect(platform: string) {
+    if (platform === "bluesky") {
+      setBlueskyOpen(true);
+      return;
+    }
     setConnecting(platform);
     try {
       const res = await fetch("/api/zernio/connect", {
@@ -263,6 +300,81 @@ export default function ConnectPage() {
           <p className="text-sm text-accent mt-2">Thanks! We&apos;ll look into it.</p>
         )}
       </div>
+
+      {blueskyOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-surface p-6 shadow-xl">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-zinc-100">
+                  Connect Bluesky
+                </h3>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Bluesky uses app passwords, not OAuth.
+                </p>
+              </div>
+              <button
+                onClick={() => setBlueskyOpen(false)}
+                className="text-zinc-500 hover:text-zinc-300 text-xl leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <ol className="text-xs text-zinc-400 space-y-1 mb-4 pl-4 list-decimal">
+              <li>
+                Go to{" "}
+                <a
+                  href="https://bsky.app/settings/app-passwords"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-purple hover:underline"
+                >
+                  bsky.app/settings/app-passwords
+                </a>
+              </li>
+              <li>Create an app password named &quot;Pulsr&quot;</li>
+              <li>Paste your handle and the app password below</li>
+            </ol>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">
+                  Handle
+                </label>
+                <input
+                  type="text"
+                  placeholder="you.bsky.social"
+                  value={bskyHandle}
+                  onChange={(e) => setBskyHandle(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-purple/50"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">
+                  App password
+                </label>
+                <input
+                  type="password"
+                  placeholder="xxxx-xxxx-xxxx-xxxx"
+                  value={bskyPassword}
+                  onChange={(e) => setBskyPassword(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-purple/50"
+                />
+              </div>
+              {bskyError && <p className="text-sm text-danger">{bskyError}</p>}
+              <Button
+                onClick={handleBlueskySubmit}
+                loading={bskySubmitting}
+                disabled={!bskyHandle.trim() || !bskyPassword.trim()}
+              >
+                Connect Bluesky
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

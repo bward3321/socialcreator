@@ -6,11 +6,17 @@ import { db } from "@/lib/db";
 import { posts, connectedAccounts } from "@/lib/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 
+const mediaItemSchema = z.object({
+  type: z.enum(["image", "video"]),
+  url: z.string().url(),
+  mimeType: z.string(),
+});
+
 const schema = z.object({
   content: z.string().min(1).max(5000),
   platforms: z.array(z.string()).min(1),
   scheduledFor: z.string().nullable().optional(),
-  mediaUrls: z.array(z.string().url()).optional().default([]),
+  media: z.array(mediaItemSchema).optional().default([]),
 });
 
 export async function POST(req: NextRequest) {
@@ -25,7 +31,9 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { content, platforms, scheduledFor, mediaUrls } = schema.parse(body);
+    const { content, platforms, scheduledFor, media } = schema.parse(body);
+    const mediaUrls = media.map((m) => m.url);
+    console.log(`[posts/create] user=${user.id} platforms=${platforms.join(",")} mediaCount=${media.length}`);
 
     // Get connected accounts for selected platforms — scoped to this user
     const accounts = await db
@@ -68,7 +76,7 @@ export async function POST(req: NextRequest) {
         })),
         scheduledFor: scheduledFor || undefined,
         publishNow: !scheduledFor,
-        mediaIds: mediaUrls.length > 0 ? mediaUrls : undefined,
+        mediaItems: media.length > 0 ? media : undefined,
       });
 
       await db

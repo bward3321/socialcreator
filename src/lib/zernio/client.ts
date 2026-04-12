@@ -183,13 +183,20 @@ export type ZernioPlatformTarget = {
   customContent?: string;
 };
 
+export type ZernioMediaItem = {
+  type: "image" | "video";
+  url: string;
+  mimeType: string;
+  thumbnail?: string;
+};
+
 export type ZernioPostInput = {
   content?: string;
   platforms: ZernioPlatformTarget[];
   scheduledFor?: string; // ISO datetime
   timezone?: string;
   publishNow?: boolean;
-  mediaIds?: string[];
+  mediaItems?: ZernioMediaItem[];
 };
 
 export type ZernioPost = {
@@ -322,7 +329,9 @@ export async function uploadMediaToZernio(
   fileBuffer: ArrayBuffer,
   contentType: string
 ): Promise<string> {
+  console.log(`[Zernio:upload] Requesting presigned URL for contentType=${contentType} size=${fileBuffer.byteLength}`);
   const { uploadUrl, publicUrl } = await getMediaUploadUrl();
+  console.log(`[Zernio:upload] Got presigned URL. publicUrl=${publicUrl}`);
 
   const putRes = await fetch(uploadUrl, {
     method: "PUT",
@@ -330,14 +339,34 @@ export async function uploadMediaToZernio(
     body: new Uint8Array(fileBuffer),
   });
 
+  console.log(`[Zernio:upload] PUT response status=${putRes.status}`);
   if (!putRes.ok) {
     const text = await putRes.text();
-    console.error(`[Zernio] Media upload PUT failed ${putRes.status}: ${text}`);
-    throw new Error(`Media upload failed: ${putRes.status}`);
+    console.error(`[Zernio:upload] PUT failed ${putRes.status}: ${text}`);
+    throw new Error(`Media upload failed: ${putRes.status} ${text.slice(0, 200)}`);
   }
 
-  console.log(`[Zernio] Media uploaded successfully: ${publicUrl}`);
+  console.log(`[Zernio:upload] Success: ${publicUrl}`);
   return publicUrl;
+}
+
+// --- Bluesky credential connect ---
+
+export type BlueskyConnectResponse = {
+  account?: ZernioAccount;
+  success?: boolean;
+  message?: string;
+};
+
+export async function connectBlueskyCredentials(
+  profileId: string,
+  identifier: string,
+  appPassword: string
+): Promise<BlueskyConnectResponse> {
+  return zernioFetch<BlueskyConnectResponse>("/connect/connect-bluesky-credentials", {
+    method: "POST",
+    body: { profileId, identifier, appPassword },
+  });
 }
 
 // --- Webhooks ---
