@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Send, Calendar, Clock, ImagePlus, X, AlertCircle, Layers } from "lucide-react";
@@ -46,7 +46,6 @@ const platformLimits: Record<string, number> = {
   threads: 500,
 };
 
-// Max media items per post, per platform
 const platformMediaMax: Record<string, number> = {
   twitter: 4,
   instagram: 10,
@@ -60,7 +59,6 @@ const platformMediaMax: Record<string, number> = {
   threads: 10,
 };
 
-// Platforms that REQUIRE media
 const platformRequiresMedia: Record<string, "any" | "video" | null> = {
   instagram: "any",
   tiktok: "video",
@@ -76,7 +74,7 @@ const platformRequiresMedia: Record<string, "any" | "video" | null> = {
 
 export default function ComposePage() {
   const [content, setContent] = useState("");
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [scheduledFor, setScheduledFor] = useState("");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(false);
@@ -94,7 +92,15 @@ export default function ComposePage() {
       .catch(() => {});
   }, []);
 
-  // Derived limits from selected platforms
+  const selectedAccounts = useMemo(
+    () => accounts.filter((a) => selectedAccountIds.includes(a.id)),
+    [accounts, selectedAccountIds]
+  );
+  const selectedPlatforms = useMemo(
+    () => [...new Set(selectedAccounts.map((a) => a.platform))],
+    [selectedAccounts]
+  );
+
   const mediaLimit = selectedPlatforms.length
     ? Math.min(...selectedPlatforms.map((p) => platformMediaMax[p] ?? 10))
     : 10;
@@ -103,26 +109,37 @@ export default function ComposePage() {
     .sort((a, b) => (platformMediaMax[a] ?? 10) - (platformMediaMax[b] ?? 10))[0];
 
   const hasVideo = mediaItems.some((m) => m.isVideo);
-  const hasImage = mediaItems.some((m) => !m.isVideo);
   const hasAnyMedia = mediaItems.length > 0;
 
-  // Pre-flight: platforms that will be rejected
-  const blockedPlatforms = selectedPlatforms.filter((p) => {
-    const req = platformRequiresMedia[p];
+  const blockedAccounts = selectedAccounts.filter((a) => {
+    const req = platformRequiresMedia[a.platform];
     if (!req) return false;
     if (req === "any" && !hasAnyMedia) return true;
     if (req === "video" && !hasVideo) return true;
     return false;
   });
-  const postablePlatforms = selectedPlatforms.filter(
-    (p) => !blockedPlatforms.includes(p)
+  const blockedIds = new Set(blockedAccounts.map((a) => a.id));
+  const postableAccounts = selectedAccounts.filter((a) => !blockedIds.has(a.id));
+  const blockedLabels = blockedAccounts.map(
+    (a) => `${a.platform} @${a.platformUsername || "account"}`
+  );
+  const postableLabels = postableAccounts.map(
+    (a) => `${a.platform} @${a.platformUsername || "account"}`
   );
 
-  function togglePlatform(platform: string) {
-    setSelectedPlatforms((prev) =>
-      prev.includes(platform)
-        ? prev.filter((p) => p !== platform)
-        : [...prev, platform]
+  const grouped = useMemo(() => {
+    const map = new Map<string, Account[]>();
+    for (const a of accounts) {
+      const list = map.get(a.platform) ?? [];
+      list.push(a);
+      map.set(a.platform, list);
+    }
+    return map;
+  }, [accounts]);
+
+  function toggleAccount(id: string) {
+    setSelectedAccountIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
 
@@ -156,7 +173,7 @@ export default function ComposePage() {
     setMediaItems((prev) => {
       const combined = [...prev, ...newItems];
       if (combined.length > mediaLimit) {
-        setError(`Max ${mediaLimit} media items for selected platforms`);
+        setError(`Max ${mediaLimit} media items for selected accounts`);
         return combined.slice(0, mediaLimit);
       }
       setError("");
@@ -191,7 +208,7 @@ export default function ComposePage() {
         mediaItems.map(async (m) => {
           if (m.uploadedUrl) {
             return {
-              type: m.isVideo ? "video" as const : "image" as const,
+              type: m.isVideo ? ("video" as const) : ("image" as const),
               url: m.uploadedUrl,
               mimeType: m.file.type,
             };
@@ -221,21 +238,23 @@ export default function ComposePage() {
     setSuccess(false);
 
     try {
-      if (postablePlatforms.length === 0) {
+      if (postableAccounts.length === 0) {
         throw new Error(
-          "No platforms can receive this post. Attach required media."
+          "No accounts can receive this post. Attach required media."
         );
       }
 
       const media = await uploadAll();
-      console.log(`[compose] submit platforms=${postablePlatforms.join(",")} media=${media.length}`);
+      console.log(
+        `[compose] submit accounts=${postableAccounts.map((a) => a.id).join(",")} media=${media.length}`
+      );
 
       const res = await fetch("/api/posts/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           content,
-          platforms: postablePlatforms,
+          accountIds: postableAccounts.map((a) => a.id),
           scheduledFor: scheduleMode && scheduledFor ? scheduledFor : null,
           media,
         }),
@@ -246,7 +265,7 @@ export default function ComposePage() {
 
       setSuccess(true);
       setContent("");
-      setSelectedPlatforms([]);
+      setSelectedAccountIds([]);
       setScheduledFor("");
       resetMedia();
     } catch (e) {
@@ -256,7 +275,6 @@ export default function ComposePage() {
     }
   }
 
-  const connectedPlatforms = [...new Set(accounts.map((a) => a.platform))];
   const canAddMore = mediaItems.length < mediaLimit;
 
   return (
@@ -341,11 +359,14 @@ export default function ComposePage() {
               </button>
             )}
 
-            {selectedPlatforms.length > 0 && (
+            {selectedAccounts.length > 0 && (
               <p className="text-xs text-zinc-600 mt-2">
                 {mediaItems.length}/{mediaLimit} media
                 {limitingPlatform && mediaLimit < 10 ? (
-                  <> — limited by <span className="capitalize">{limitingPlatform}</span></>
+                  <>
+                    {" "}— limited by{" "}
+                    <span className="capitalize">{limitingPlatform}</span>
+                  </>
                 ) : null}
               </p>
             )}
@@ -353,9 +374,9 @@ export default function ComposePage() {
 
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">
-              Platforms
+              Accounts
             </label>
-            {connectedPlatforms.length === 0 ? (
+            {accounts.length === 0 ? (
               <p className="text-sm text-zinc-600">
                 No accounts connected.{" "}
                 <a href="/connect" className="text-purple hover:underline">
@@ -363,54 +384,71 @@ export default function ComposePage() {
                 </a>
               </p>
             ) : (
-              <div className="flex flex-wrap gap-2">
-                {connectedPlatforms.map((platform) => {
-                  const selected = selectedPlatforms.includes(platform);
-                  return (
-                    <button
-                      key={platform}
-                      onClick={() => togglePlatform(platform)}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors cursor-pointer ${
-                        selected
-                          ? "border-purple/40 bg-purple/10 text-purple"
-                          : "border-border bg-surface text-zinc-400 hover:border-zinc-600"
-                      }`}
-                    >
-                      <span
-                        className="w-2.5 h-2.5 rounded-full"
-                        style={{
-                          backgroundColor:
-                            platformColors[platform] || "#6B7280",
-                        }}
-                      />
-                      <span className="capitalize">{platform}</span>
-                    </button>
-                  );
-                })}
+              <div className="space-y-3">
+                {[...grouped.entries()].map(([platform, platformAccounts]) => (
+                  <div key={platform}>
+                    <p className="text-xs uppercase tracking-wider text-zinc-600 mb-1.5 capitalize">
+                      {platform} ({platformAccounts.length})
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {platformAccounts.map((account) => {
+                        const selected = selectedAccountIds.includes(account.id);
+                        return (
+                          <button
+                            key={account.id}
+                            onClick={() => toggleAccount(account.id)}
+                            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium border transition-colors cursor-pointer ${
+                              selected
+                                ? "border-purple/40 bg-purple/10 text-purple"
+                                : "border-border bg-surface text-zinc-400 hover:border-zinc-600"
+                            }`}
+                          >
+                            <span
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{
+                                backgroundColor:
+                                  platformColors[platform] || "#6B7280",
+                              }}
+                            />
+                            <span>
+                              @{account.platformUsername || account.platformDisplayName || "account"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
-          {blockedPlatforms.length > 0 && (
+          {blockedAccounts.length > 0 && (
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-300">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <div>
-                <p className="font-medium capitalize">
-                  {blockedPlatforms.join(", ")} require
-                  {blockedPlatforms.some(
-                    (p) => platformRequiresMedia[p] === "video"
+                <p className="font-medium">
+                  {blockedLabels.join(", ")} need
+                  {blockedAccounts.some(
+                    (a) => platformRequiresMedia[a.platform] === "video"
                   )
                     ? " video"
                     : " media"}
                   .
                 </p>
-                {postablePlatforms.length > 0 ? (
+                {postableAccounts.length > 0 ? (
                   <p className="text-amber-300/80">
-                    Will post to {postablePlatforms.join(", ")} only.
+                    Will post to {postableLabels.join(", ")} only.
                   </p>
                 ) : (
                   <p className="text-amber-300/80">
-                    Attach {blockedPlatforms.some((p) => platformRequiresMedia[p] === "video") ? "a video" : "an image or video"} to post.
+                    Attach{" "}
+                    {blockedAccounts.some(
+                      (a) => platformRequiresMedia[a.platform] === "video"
+                    )
+                      ? "a video"
+                      : "an image or video"}{" "}
+                    to post.
                   </p>
                 )}
               </div>
@@ -441,8 +479,8 @@ export default function ComposePage() {
               loading={loading || uploading}
               disabled={
                 !content ||
-                selectedPlatforms.length === 0 ||
-                postablePlatforms.length === 0
+                selectedAccountIds.length === 0 ||
+                postableAccounts.length === 0
               }
             >
               <Send className="w-4 h-4" />
@@ -454,8 +492,8 @@ export default function ComposePage() {
               loading={loading || uploading}
               disabled={
                 !content ||
-                selectedPlatforms.length === 0 ||
-                postablePlatforms.length === 0 ||
+                selectedAccountIds.length === 0 ||
+                postableAccounts.length === 0 ||
                 !scheduledFor
               }
             >
@@ -470,25 +508,26 @@ export default function ComposePage() {
             Live Preview
           </h3>
           <div className="space-y-4">
-            {selectedPlatforms.length === 0 ? (
+            {selectedAccounts.length === 0 ? (
               <Card className="text-center py-12">
                 <p className="text-sm text-zinc-600">
-                  Select platforms to see previews
+                  Select accounts to see previews
                 </p>
               </Card>
             ) : (
-              selectedPlatforms.map((platform) => {
+              selectedAccounts.map((account) => {
+                const platform = account.platform;
                 const limit = platformLimits[platform] || 5000;
                 const overLimit = content.length > limit;
-                const account = accounts.find(
-                  (a) => a.platform === platform
-                );
                 const first = mediaItems[0];
                 const isCarousel = mediaItems.length > 1;
-                const willSkip = blockedPlatforms.includes(platform);
+                const willSkip = blockedIds.has(account.id);
 
                 return (
-                  <Card key={platform} className={willSkip ? "opacity-50" : ""}>
+                  <Card
+                    key={account.id}
+                    className={willSkip ? "opacity-50" : ""}
+                  >
                     <div className="flex items-center gap-3 mb-3">
                       <div
                         className="w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-xs"
@@ -504,7 +543,7 @@ export default function ComposePage() {
                           {platform}
                         </p>
                         <p className="text-xs text-zinc-500">
-                          @{account?.platformUsername || "you"}
+                          @{account.platformUsername || "you"}
                         </p>
                       </div>
                       {willSkip && (

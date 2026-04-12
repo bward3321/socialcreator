@@ -14,7 +14,7 @@ const mediaItemSchema = z.object({
 
 const schema = z.object({
   content: z.string().min(1).max(5000),
-  platforms: z.array(z.string()).min(1),
+  accountIds: z.array(z.string().uuid()).min(1),
   scheduledFor: z.string().nullable().optional(),
   media: z.array(mediaItemSchema).optional().default([]),
 });
@@ -31,27 +31,29 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { content, platforms, scheduledFor, media } = schema.parse(body);
+    const { content, accountIds, scheduledFor, media } = schema.parse(body);
     const mediaUrls = media.map((m) => m.url);
-    console.log(`[posts/create] user=${user.id} platforms=${platforms.join(",")} mediaCount=${media.length}`);
+    console.log(`[posts/create] user=${user.id} accountIds=${accountIds.join(",")} mediaCount=${media.length}`);
 
-    // Get connected accounts for selected platforms — scoped to this user
+    // Get selected accounts — scoped to this user for tenant safety
     const accounts = await db
       .select()
       .from(connectedAccounts)
       .where(
         and(
           eq(connectedAccounts.userId, user.id),
-          inArray(connectedAccounts.platform, platforms)
+          inArray(connectedAccounts.id, accountIds)
         )
       );
 
     if (accounts.length === 0) {
       return NextResponse.json(
-        { error: "No connected accounts for selected platforms" },
+        { error: "No connected accounts matched" },
         { status: 400 }
       );
     }
+
+    const platforms = [...new Set(accounts.map((a) => a.platform))];
 
     // Create post in our DB first
     const [post] = await db
@@ -68,12 +70,17 @@ export async function POST(req: NextRequest) {
 
     try {
       // Create post via Zernio
+      const zernioTargets = accounts
+        .filter((a) => a.zernioAccountId)
+        .map((a) => ({ platform: a.platform, accountId: a.zernioAccountId! }));
+
+      if (zernioTargets.length === 0) {
+        throw new Error("Selected accounts missing Zernio account IDs — try reconnecting");
+      }
+
       const zernioPost = await createZernioPost({
         content,
-        platforms: accounts.map((a) => ({
-          platform: a.platform,
-          accountId: a.zernioAccountId || a.platform,
-        })),
+        platforms: zernioTargets,
         scheduledFor: scheduledFor || undefined,
         publishNow: !scheduledFor,
         mediaItems: media.length > 0 ? media : undefined,
