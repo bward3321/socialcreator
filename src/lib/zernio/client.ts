@@ -13,7 +13,7 @@ async function zernioFetch<T>(path: string, opts: RequestOptions = {}): Promise<
     "Content-Type": "application/json",
   };
 
-  console.log(`[Zernio] ${opts.method || "GET"} ${url}`);
+  console.log(`[Zernio] Calling URL: ${opts.method || "GET"} ${url}`);
 
   const res = await fetch(url, {
     method: opts.method || "GET",
@@ -322,7 +322,7 @@ export type MediaUploadResponse = {
 };
 
 export async function getMediaUploadUrl(): Promise<MediaUploadResponse> {
-  return zernioFetch<MediaUploadResponse>("/media/get-media-presigned-url");
+  return zernioFetch<MediaUploadResponse>("/media/presign");
 }
 
 export async function uploadMediaToZernio(
