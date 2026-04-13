@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const publicUrl = await uploadMediaToZernio(arrayBuffer, file.type);
+    const publicUrl = await uploadMediaToZernio(arrayBuffer, file.name, file.type);
     console.log(`[upload] Done. url=${publicUrl}`);
 
     return NextResponse.json({
