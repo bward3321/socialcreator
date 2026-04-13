@@ -321,8 +321,13 @@ export type MediaUploadResponse = {
   publicUrl: string;
 };
 
-export async function getMediaUploadUrl(): Promise<MediaUploadResponse> {
-  return zernioFetch<MediaUploadResponse>("/media/presign");
+export async function getMediaUploadUrl(
+  contentType: string
+): Promise<MediaUploadResponse> {
+  return zernioFetch<MediaUploadResponse>("/media/presign", {
+    method: "POST",
+    body: { contentType },
+  });
 }
 
 export async function uploadMediaToZernio(
@@ -330,9 +335,10 @@ export async function uploadMediaToZernio(
   contentType: string
 ): Promise<string> {
   console.log(`[Zernio:upload] Requesting presigned URL for contentType=${contentType} size=${fileBuffer.byteLength}`);
-  const { uploadUrl, publicUrl } = await getMediaUploadUrl();
+  const { uploadUrl, publicUrl } = await getMediaUploadUrl(contentType);
   console.log(`[Zernio:upload] Got presigned URL. publicUrl=${publicUrl}`);
 
+  console.log(`[Zernio:upload] PUT ${uploadUrl.split("?")[0]} contentType=${contentType} bytes=${fileBuffer.byteLength}`);
   const putRes = await fetch(uploadUrl, {
     method: "PUT",
     headers: { "Content-Type": contentType },
