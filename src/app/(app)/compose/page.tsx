@@ -393,6 +393,8 @@ export default function ComposePage() {
                     <div className="flex flex-wrap gap-2">
                       {platformAccounts.map((account) => {
                         const selected = selectedAccountIds.includes(account.id);
+                        const videoOnly =
+                          platformRequiresMedia[platform] === "video";
                         return (
                           <button
                             key={account.id}
@@ -413,6 +415,11 @@ export default function ComposePage() {
                             <span>
                               @{account.platformUsername || account.platformDisplayName || "account"}
                             </span>
+                            {videoOnly && (
+                              <span className="text-[9px] uppercase tracking-wider text-amber-300/80 border border-amber-500/30 rounded px-1 py-0.5">
+                                video only
+                              </span>
+                            )}
                           </button>
                         );
                       })}
@@ -427,30 +434,55 @@ export default function ComposePage() {
             <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/10 text-xs text-amber-300">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <div>
-                <p className="font-medium">
-                  {blockedLabels.join(", ")} need
-                  {blockedAccounts.some(
+                {(() => {
+                  const videoOnlyBlocked = blockedAccounts.filter(
                     (a) => platformRequiresMedia[a.platform] === "video"
-                  )
-                    ? " video"
-                    : " media"}
-                  .
-                </p>
-                {postableAccounts.length > 0 ? (
-                  <p className="text-amber-300/80">
-                    Will post to {postableLabels.join(", ")} only.
-                  </p>
-                ) : (
-                  <p className="text-amber-300/80">
-                    Attach{" "}
-                    {blockedAccounts.some(
-                      (a) => platformRequiresMedia[a.platform] === "video"
-                    )
-                      ? "a video"
-                      : "an image or video"}{" "}
-                    to post.
-                  </p>
-                )}
+                  );
+                  const videoPlatforms = [
+                    ...new Set(videoOnlyBlocked.map((a) => a.platform)),
+                  ];
+                  if (
+                    videoOnlyBlocked.length > 0 &&
+                    videoOnlyBlocked.length === blockedAccounts.length
+                  ) {
+                    const names = videoPlatforms
+                      .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+                      .join(" and ");
+                    return (
+                      <>
+                        <p className="font-medium">
+                          ⚠️ {names} require video content.
+                        </p>
+                        <p className="text-amber-300/80">
+                          {postableAccounts.length > 0
+                            ? `Your image won't post to ${names}. Uncheck them or add a video to include them.`
+                            : `Add a video to post to ${names}, or select a different platform.`}
+                        </p>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <p className="font-medium">
+                        {blockedLabels.join(", ")} need
+                        {videoOnlyBlocked.length > 0 ? " video" : " media"}.
+                      </p>
+                      {postableAccounts.length > 0 ? (
+                        <p className="text-amber-300/80">
+                          Will post to {postableLabels.join(", ")} only.
+                        </p>
+                      ) : (
+                        <p className="text-amber-300/80">
+                          Attach{" "}
+                          {videoOnlyBlocked.length > 0
+                            ? "a video"
+                            : "an image or video"}{" "}
+                          to post.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -484,7 +516,9 @@ export default function ComposePage() {
               }
             >
               <Send className="w-4 h-4" />
-              Post now
+              {blockedAccounts.length > 0 && postableAccounts.length > 0
+                ? `Post to ${postableAccounts.length} of ${selectedAccounts.length} accounts`
+                : "Post now"}
             </Button>
             <Button
               variant="secondary"

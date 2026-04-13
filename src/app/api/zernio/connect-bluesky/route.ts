@@ -22,8 +22,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { identifier, appPassword } = schema.parse(body);
 
-    const normalized = identifier.trim().replace(/^@/, "");
-    console.log(`[connect-bluesky] user=${user.id} identifier=${normalized}`);
+    let normalized = identifier.trim().replace(/^@/, "");
+    if (!normalized.includes(".")) normalized = `${normalized}.bsky.social`;
+    console.log(`[connect-bluesky] user=${user.id} handle=${normalized}`);
 
     const result = await connectBlueskyCredentials(
       user.zernioProfileKey,

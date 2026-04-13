@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 import { getCurrentUser, hasAccess } from "@/lib/auth";
 import { uploadMediaToZernio } from "@/lib/zernio/client";
 
@@ -44,12 +45,45 @@ export async function POST(req: NextRequest) {
     }
 
     const arrayBuffer = await file.arrayBuffer();
-    const publicUrl = await uploadMediaToZernio(arrayBuffer, file.name, file.type);
+
+    let processedBuffer: ArrayBuffer | Buffer = arrayBuffer;
+    let processedName = file.name;
+    let processedType = file.type;
+
+    if (
+      processedType.startsWith("image/") &&
+      processedType !== "image/jpeg" &&
+      processedType !== "image/png"
+    ) {
+      console.log(`[upload] Converting ${processedType} -> image/jpeg (${file.name})`);
+      const converted = await sharp(Buffer.from(arrayBuffer))
+        .jpeg({ quality: 90 })
+        .toBuffer();
+      processedBuffer = converted;
+      processedName = file.name.replace(/\.(webp|gif|bmp|tiff|tif|avif|heic|heif)$/i, ".jpg");
+      if (!/\.(jpg|jpeg)$/i.test(processedName)) processedName = `${processedName}.jpg`;
+      processedType = "image/jpeg";
+      console.log(`[upload] Converted. name=${processedName} bytes=${converted.byteLength}`);
+    }
+
+    const bufferForUpload =
+      processedBuffer instanceof Buffer
+        ? processedBuffer.buffer.slice(
+            processedBuffer.byteOffset,
+            processedBuffer.byteOffset + processedBuffer.byteLength
+          )
+        : processedBuffer;
+
+    const publicUrl = await uploadMediaToZernio(
+      bufferForUpload as ArrayBuffer,
+      processedName,
+      processedType
+    );
     console.log(`[upload] Done. url=${publicUrl}`);
 
     return NextResponse.json({
       url: publicUrl,
-      mimeType: file.type,
+      mimeType: processedType,
       type: isVideo ? "video" : "image",
     });
   } catch (e) {

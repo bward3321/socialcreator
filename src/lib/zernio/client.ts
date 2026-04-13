@@ -371,12 +371,18 @@ export type BlueskyConnectResponse = {
 
 export async function connectBlueskyCredentials(
   profileId: string,
-  identifier: string,
+  handle: string,
   appPassword: string
 ): Promise<BlueskyConnectResponse> {
-  return zernioFetch<BlueskyConnectResponse>("/connect/connect-bluesky-credentials", {
+  const body = { profileId, handle, appPassword };
+  console.log(`[Zernio:bluesky] POST /connect/bluesky body=`, {
+    profileId,
+    handle,
+    appPassword: "***",
+  });
+  return zernioFetch<BlueskyConnectResponse>("/connect/bluesky", {
     method: "POST",
-    body: { profileId, identifier, appPassword },
+    body,
   });
 }
 

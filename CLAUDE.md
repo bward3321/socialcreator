@@ -36,6 +36,14 @@ Pulsr is a SaaS creator analytics + scheduling tool. It aggregates social media 
 - The cron sync builds each user's account ID set from the DB, then filters Zernio analytics entries by those account IDs.
 - All DB queries on `connected_accounts` and `posts` must include a `userId` filter. Never trust Zernio's response to be pre-scoped.
 
+## Platform-specific media constraints
+- **Instagram**: requires media. Images MUST be JPG or PNG — WebP/GIF/etc. are rejected. `/api/upload/route.ts` auto-converts non-JPG/PNG images to JPEG via `sharp` before upload.
+- **TikTok**: video-only. Images will be rejected.
+- **YouTube**: video-only. Images will be rejected.
+- **Pinterest**: requires media (image or video).
+- **Bluesky**: connect uses **app passwords, not OAuth**. Endpoint: `POST https://zernio.com/api/v1/connect/bluesky` with `{ profileId, handle, appPassword }` (note: field is `handle`, NOT `identifier`). Handle must include a domain — `brendan` → normalize to `brendan.bsky.social`.
+- Platform media limits and requirements are codified in `src/app/(app)/compose/page.tsx` (`platformMediaMax`, `platformRequiresMedia`). Update both the constraint map AND the pre-flight UI when adding a platform.
+
 ## Database
 6 tables: users, magic_link_tokens, sessions, connected_accounts, posts, post_analytics, account_analytics. All use UUID primary keys. Schema defined with Drizzle in `src/lib/db/schema.ts`.
 
